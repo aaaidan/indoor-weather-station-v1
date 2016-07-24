@@ -8,40 +8,40 @@
 
 #define MOONBASE_BOARD true
 
+#include <cassert>
+
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h> 
+#include <Ticker.h>
 
 #if MOONBASE_BOARD
   #include <Wire.h>
 
   // SmartEverything HTS221 and LPS25H libraries.  To add via Arduino IDE:
   // Sketch->Include Library->Manage Libraries->filter "SmartEverything"
+  // https://github.com/ameltech 
   #include <HTS221.h>
   #include <LPS25H.h>
 
 #else
 
-  // Depends on Adafruit DHT Arduino library
+  // Adafruit DHT Arduino library
   // https://github.com/adafruit/DHT-sensor-library
   #include <DHT.h>
   #define DHTTYPE DHT22   // DHT Shield uses DHT 11
   #define DHTPIN D4       // DHT Shield uses pin D4
 #endif // if/else MOONBASE_BOARD
 
-//WiFiManager
-#include <DNSServer.h>
-#include <ESP8266WebServer.h>
-
-
-#include <WiFiManager.h> 
-#include <Ticker.h>
 Ticker ticker;
 
-
-
-
-const char* DEVNAME = ""; const char* ISSUEID  = ""; const char* ssid = ""; const char* password = ""; //
-
+//TODO: What are these for?
+const char* DEVNAME = "";
+const char* ISSUEID  = "";
+const char* ssid = "";
+const char* password = "";
 
 void tick()
 {
@@ -61,10 +61,11 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 }
 
 
-
-
-// IP address of the server we send HTTP(S) requests to.
+/// IP address of the server we send data to via HTTP(S) requests.
 IPAddress server(120,138,27,109);
+
+/// IP address of the ESP8266 when we're serving the captive config page
+IPAddress captiveServeIP(192, 168, 1, 1);
 
 #if MOONBASE_BOARD
   /// Raw float values from the sensor
@@ -179,18 +180,31 @@ void WifiTryUp() {
 
     delay(1000);
 
-
-
     WiFi.begin(ssid, password);
 
     Serial.println();
     Serial.println();
     Serial.println("Wait for WiFi... ");
-
 }
 
 
+enum class SystemState {
+  STARTING,
+  RESTARTING,
+  NORMAL,
+  SERVE_CAPTIVE_SETUP,
+  SERVE_CAPTIVE_WAIT,
+  SERVE_CAPTIVE_DONE,
+};
+
+static SystemState systemStateGlobal(SystemState::STARTING);
+
+/// new'ed up to serve the captive configuration page, nullptr when not in use
+static ESP8266WebServer *configHTTPServer(nullptr);
+static DNSServer *configDNSServer(nullptr);
+  
 unsigned long _ESP_id;
+
 void setup(void)
 {
   // Open the Arduino IDE Serial Monitor to see what the code is doing
@@ -208,40 +222,79 @@ void setup(void)
   #endif // if/else MOONBASE_BOARD
 
   _ESP_id = ESP.getChipId();  // uint32 -> unsigned long on arduino
-  Serial.println(_ESP_id,HEX);
+  Serial.println(_ESP_id, HEX);
   Serial.println("");
-
-  WiFi.onEvent(WiFiEvent);
 
   // Initial read
   read_sensor();
 
+  systemStateGlobal = SystemState::SERVE_CAPTIVE_SETUP;
+}
+
+
+void serveConfigRoot() {
+  assert(configHTTPServer);
+  configHTTPServer->send(200, "text/plain", "Hello from the ESP8266!");
+}
+
+char captivePortalSource[] =
+"<!doctype html>"
+"<html class=\"no-js\" lang=\"en\">"
+"Captive Portal? <a href=\"http://setup/\">test</a>."
+"</html>";
+
+void serveNotFound() {
+  assert(configHTTPServer);
+  configHTTPServer->send(200, "text/html", captivePortalSource);
 }
 
 void loop(void)
 {
-  delay(1000);
-  read_sensor();
-  
-  if (WiFiState == UP) {
-    #if MOONBASE_BOARD
-      httpsRequest(temperature, humidity, pressure);
-    #else
-      httpsRequest(temperature, humidity);
-    #endif // if/else MOONBASE_BOARD
-  }
+  switch(systemStateGlobal) {
+    case SystemState::STARTING:
+    case SystemState::RESTARTING:
+    case SystemState::NORMAL:
+      break;
 
-  // Connect to your WiFi network
-  if (WiFiState == DOWN) {
-    WifiTryUp();
-    WiFiState = STARTING;
-    WiFiStartTime = millis();
-  }
-  if (WiFiState == STARTING) {
-    if (millis() - WiFiStartTime > 30000) { WiFiState = DOWN; Serial.println("WiFi Connect Timeout"); }
-  }
+    case SystemState::SERVE_CAPTIVE_SETUP:
+      WiFi.mode(WIFI_AP);
+      WiFi.softAPConfig(captiveServeIP, captiveServeIP,
+                        IPAddress(255, 255, 255, 0));
+      WiFi.softAP("VCW Indoor Weather Station");
 
+      configHTTPServer = new ESP8266WebServer(80);
+      configHTTPServer->on("/", serveConfigRoot);
+      configHTTPServer->onNotFound(serveNotFound);
+      configHTTPServer->begin();
 
+      configDNSServer = new DNSServer;
+      configDNSServer->setTTL(0);
+      configDNSServer->start(53, "*", captiveServeIP);
+
+      systemStateGlobal = SystemState::SERVE_CAPTIVE_WAIT;
+      break;
+
+    case SystemState::SERVE_CAPTIVE_WAIT:
+      configDNSServer->processNextRequest();
+      configHTTPServer->handleClient();
+      break;
+
+    case SystemState::SERVE_CAPTIVE_DONE:
+      configHTTPServer->close();
+      delete configHTTPServer;
+      configHTTPServer = nullptr;
+
+      configDNSServer->stop();
+      delete configDNSServer;
+      configDNSServer = nullptr;
+
+      systemStateGlobal = SystemState::RESTARTING;
+      break;
+      
+    default:
+      assert(0);
+      break;
+  };
 }
 
 
