@@ -31,7 +31,21 @@ struct APCredentials
 /*!
  * Should only ever be one of these created at a time; ESP8266WebServer uses
  * callbacks to handle requests, and can only deal with one client at a time.
- */
+ *
+ * Usage:
+ *
+ *   CaptiveConfig *configGetter(new CaptiveConfig);
+ *
+ *   while(!configGetter->haveConfig())
+ *       // DNS and HTTP servers start up, user makes config selections.
+ *       do_other_stuff();
+ * 
+ *   // Retrieve the config
+ *   auto receivedConfig(configGetter->getConfig());
+ *
+ *   // done
+ *   delete configGetter;
+ * */
 class CaptiveConfig
 {
     public:
@@ -39,13 +53,22 @@ class CaptiveConfig
         CaptiveConfig();
         ~CaptiveConfig();
         
-        /// Call frequently from the main loop; returns true when we're done
+        /// Advances state machine, handles requests. Returns true when done.
         bool haveConfig();
 
         /// Returns the SSID + Passphase selected
         APCredentials getConfig() const;
         
     protected:
+
+        enum class CaptiveConfigState {
+            SCANNING,
+            STARTING_WIFI,
+            STARTING_HTTP,
+            STARTING_DNS,
+            SERVING,
+            DONE,
+        } state;
 
         ESP8266WebServer *configHTTPServer;
 

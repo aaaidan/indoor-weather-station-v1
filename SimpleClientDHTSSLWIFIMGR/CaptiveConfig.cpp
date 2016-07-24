@@ -11,7 +11,8 @@ CaptiveConfig * CaptiveConfig::instance(nullptr);
 CaptiveConfig::CaptiveConfig() :
     configHTTPServer(nullptr),
     configDNSServer(nullptr),
-    pickedCreds(nullptr)
+    pickedCreds(nullptr),
+    state(CaptiveConfigState::SCANNING)
 {
     assert(instance == nullptr);
     instance = this;
@@ -31,20 +32,8 @@ CaptiveConfig::CaptiveConfig() :
         knownAPs.push_back(newAp);
     }
 
-    WiFi.mode(WIFI_AP);
-    WiFi.softAPConfig( captiveServeIP, captiveServeIP,
-                       IPAddress(255, 255, 255, 0) );
-    WiFi.softAP("VCW Indoor Weather Station");
-
-    configHTTPServer = new ESP8266WebServer(80);
-    configHTTPServer->on("/storePassword", storePassword);
-    // TODO: Would be better to redirect to a proper start page so we don't see the apple URL for instance.
-    configHTTPServer->onNotFound(serveConfigPage);
-    configHTTPServer->begin();
-
-    configDNSServer = new DNSServer;
-    configDNSServer->setTTL(0);
-    configDNSServer->start(53, "*", captiveServeIP);
+    // Calls to haveConfig() will finish the setup
+    state = CaptiveConfigState::STARTING_WIFI;
 }
 
 
@@ -70,10 +59,48 @@ CaptiveConfig::~CaptiveConfig()
 
 bool CaptiveConfig::haveConfig()
 {
-    configDNSServer->processNextRequest();
-    configHTTPServer->handleClient();
+    switch (state) {
+        case CaptiveConfigState::STARTING_WIFI:
+            WiFi.mode(WIFI_AP);
+            WiFi.softAPConfig( captiveServeIP, captiveServeIP,
+                               IPAddress(255, 255, 255, 0) );
+            WiFi.softAP("VCW Indoor Weather Station");
 
-    return pickedCreds != nullptr;
+            state = CaptiveConfigState::STARTING_HTTP;
+            return false;
+
+        case CaptiveConfigState::STARTING_HTTP:
+            configHTTPServer = new ESP8266WebServer(80);
+            configHTTPServer->on("/storePassword", storePassword);
+            // TODO: Would be better to redirect to a proper start page so we don't see the apple URL for instance.
+            configHTTPServer->onNotFound(serveConfigPage);
+            configHTTPServer->begin();
+
+            state = CaptiveConfigState::STARTING_DNS;
+            return false;
+
+        case CaptiveConfigState::STARTING_DNS:
+            configDNSServer = new DNSServer;
+            configDNSServer->setTTL(0);
+            configDNSServer->start(53, "*", captiveServeIP);
+
+            state = CaptiveConfigState::SERVING;
+            return false;
+
+        case CaptiveConfigState::SERVING:
+            configDNSServer->processNextRequest();
+            configHTTPServer->handleClient();
+
+            // storePassword() advances state to DONE
+            return false;
+
+        case CaptiveConfigState::DONE:
+            return true;
+
+        default:
+            assert(0);
+            return false;
+    }
 }
 
 
@@ -104,6 +131,8 @@ APCredentials CaptiveConfig::getConfig() const
         "This is beginning to look",
         "like web programming"
         };
+
+    instance->state = CaptiveConfigState::DONE;
 
     instance->configHTTPServer->send(200, "text/html", out);
 }
