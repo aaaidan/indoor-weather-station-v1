@@ -8,14 +8,12 @@
 
 #define MOONBASE_BOARD true
 
-#include <cassert>
-
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
-#include <DNSServer.h>
-#include <ESP8266WebServer.h>
 #include <WiFiManager.h> 
 #include <Ticker.h>
+
+#include "CaptiveConfig.h"
 
 #if MOONBASE_BOARD
   #include <Wire.h>
@@ -63,9 +61,6 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 
 /// IP address of the server we send data to via HTTP(S) requests.
 IPAddress server(120,138,27,109);
-
-/// IP address of the ESP8266 when we're serving the captive config page
-IPAddress captiveServeIP(192, 168, 1, 1);
 
 #if MOONBASE_BOARD
   /// Raw float values from the sensor
@@ -188,22 +183,10 @@ void WifiTryUp() {
 }
 
 
-enum class SystemState {
-  STARTING,
-  RESTARTING,
-  NORMAL,
-  SERVE_CAPTIVE_SETUP,
-  SERVE_CAPTIVE_WAIT,
-  SERVE_CAPTIVE_DONE,
-};
-
-static SystemState systemStateGlobal(SystemState::STARTING);
-
-/// new'ed up to serve the captive configuration page, nullptr when not in use
-static ESP8266WebServer *configHTTPServer(nullptr);
-static DNSServer *configDNSServer(nullptr);
-  
 unsigned long _ESP_id;
+
+/// Points to instance of captive configuration manager, when there is one
+CaptiveConfig *captiveConfig(nullptr);
 
 void setup(void)
 {
@@ -228,73 +211,30 @@ void setup(void)
   // Initial read
   read_sensor();
 
-  systemStateGlobal = SystemState::SERVE_CAPTIVE_SETUP;
+  // Instantiate CaptiveConfig
+  captiveConfig = new CaptiveConfig;
 }
 
-
-void serveConfigRoot() {
-  assert(configHTTPServer);
-  configHTTPServer->send(200, "text/plain", "Hello from the ESP8266!");
-}
-
-char captivePortalSource[] =
-"<!doctype html>"
-"<html class=\"no-js\" lang=\"en\">"
-"Captive Portal? <a href=\"http://setup/\">test</a>."
-"</html>";
-
-void serveNotFound() {
-  assert(configHTTPServer);
-  configHTTPServer->send(200, "text/html", captivePortalSource);
-}
 
 void loop(void)
 {
-  switch(systemStateGlobal) {
-    case SystemState::STARTING:
-    case SystemState::RESTARTING:
-    case SystemState::NORMAL:
-      break;
+  if( captiveConfig && captiveConfig->haveConfig() ) {
 
-    case SystemState::SERVE_CAPTIVE_SETUP:
-      WiFi.mode(WIFI_AP);
-      WiFi.softAPConfig(captiveServeIP, captiveServeIP,
-                        IPAddress(255, 255, 255, 0));
-      WiFi.softAP("VCW Indoor Weather Station");
+    APCredentials requestedNetwork( captiveConfig->getConfig() );
 
-      configHTTPServer = new ESP8266WebServer(80);
-      configHTTPServer->on("/", serveConfigRoot);
-      configHTTPServer->onNotFound(serveNotFound);
-      configHTTPServer->begin();
+    Serial.print("User wants to connect with SSID:\n\t\"");
+    Serial.print(requestedNetwork.ssid);
+    Serial.print("\"\nwith passphrase:\n\t\"");
+    Serial.print(requestedNetwork.passphrase);
+    Serial.print("\"\n");
 
-      configDNSServer = new DNSServer;
-      configDNSServer->setTTL(0);
-      configDNSServer->start(53, "*", captiveServeIP);
+    delete captiveConfig;
+    captiveConfig = nullptr;
 
-      systemStateGlobal = SystemState::SERVE_CAPTIVE_WAIT;
-      break;
+    // TODO: At this point, WiFi is still in station mode, but HTTP and DNS
+    // servers have been cleaned up.
+  }
 
-    case SystemState::SERVE_CAPTIVE_WAIT:
-      configDNSServer->processNextRequest();
-      configHTTPServer->handleClient();
-      break;
-
-    case SystemState::SERVE_CAPTIVE_DONE:
-      configHTTPServer->close();
-      delete configHTTPServer;
-      configHTTPServer = nullptr;
-
-      configDNSServer->stop();
-      delete configDNSServer;
-      configDNSServer = nullptr;
-
-      systemStateGlobal = SystemState::RESTARTING;
-      break;
-      
-    default:
-      assert(0);
-      break;
-  };
 }
 
 
