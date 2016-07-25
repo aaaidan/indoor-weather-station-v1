@@ -1,7 +1,6 @@
 #ifndef CAPTIVE_CONFIG_HEADER
 #define CAPTIVE_CONFIG_HEADER
 
-#include <list> // Probably a bit heavy, but ESP8266WiFiGeneric uses list
 #include <IPAddress.h>
 
 class ESP8266WebServer;
@@ -14,8 +13,8 @@ const static IPAddress captiveServeIP(192, 168, 1, 1);
 struct APType
 {
     String ssid;
-
-    // TODO: Encryption type, etc.
+    int32_t rssi; // Signal strength
+    uint8_t encryptionType; // = ENC_TYPE_NONE for open networks
 };
 
 
@@ -74,7 +73,15 @@ class CaptiveConfig
 
         DNSServer *configDNSServer;
 
-        std::list<APType> knownAPs;
+        /// Number of networks in knownAPs
+        int numAPsFound;
+
+        /// Array of pointers to known access points.
+        /*!
+         * At maximum, numAPsFound of these will be valid.  Others will be
+         * set to nullptr and at the high end of the array.
+         */
+        APType **knownAPs;
 
         static void storePassword();
         

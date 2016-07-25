@@ -12,7 +12,8 @@ CaptiveConfig::CaptiveConfig() :
     configHTTPServer(nullptr),
     configDNSServer(nullptr),
     pickedCreds(nullptr),
-    state(CaptiveConfigState::SCANNING)
+    state(CaptiveConfigState::SCANNING),
+    numAPsFound(0)
 {
     assert(instance == nullptr);
     instance = this;
@@ -21,15 +22,36 @@ CaptiveConfig::CaptiveConfig() :
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
 
-    auto numNetworksFound( WiFi.scanNetworks() );
-    for(auto i(0); i < numNetworksFound; ++i) {
-        APType newAp;
-        newAp.ssid = WiFi.SSID(i);
+    // Scan for WiFi networks that we can see
+    auto totalNetworksFound( WiFi.scanNetworks() );
 
-      //Serial.print(WiFi.RSSI(i));
-      //Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE)?" ":"*");
+    // Fill knownAPs with a set of different networks we can see.
+    // Resolve duplicates by keeping the strongest signals for a given SSID.
+    knownAPs = new APType *[totalNetworksFound];
+    for(auto i(0); i < totalNetworksFound; ++i) {
+        knownAPs[i] = nullptr;
 
-        knownAPs.push_back(newAp);
+        auto thisSSID( WiFi.SSID(i) );
+        auto thisRSSI( WiFi.RSSI(i) );
+
+        auto isNewSSID(true);
+        for(auto j(0); j < numAPsFound; ++j) {
+            if( knownAPs[j]->ssid == thisSSID ) {
+                isNewSSID = false;
+                if( knownAPs[j]->rssi > thisRSSI ) {
+                    knownAPs[j]->ssid = thisSSID;
+                    knownAPs[j]->rssi = thisRSSI;
+                    knownAPs[j]->encryptionType = WiFi.encryptionType(i);
+                }
+                break;
+            }
+        }
+
+        if(isNewSSID) {
+            knownAPs[numAPsFound++] = new APType{ thisSSID,
+                                                  thisRSSI,
+                                                  WiFi.encryptionType(i) };
+        }
     }
 
     // Calls to haveConfig() will finish the setup
@@ -52,6 +74,14 @@ CaptiveConfig::~CaptiveConfig()
     if (pickedCreds) {
         delete pickedCreds;
     }
+
+    for(auto i(0); i < numAPsFound; ++i) {
+        if(knownAPs[i] != nullptr) {
+            delete knownAPs[i];
+            knownAPs[i] = nullptr;
+        }
+    }
+    delete [] knownAPs;
 
     instance = nullptr;
 }
@@ -145,16 +175,19 @@ APCredentials CaptiveConfig::getConfig() const
         "<!doctype html>"
         "<html class=\"no-js\" lang=\"en\">"
         "Pretend to <a href=\"http://setup/storePassword\">enter a passphrase</a>."
-        "<hr />"
+        "<hr /><table><tr><th>SSID</th><th>RSSI</th></tr>"
         );
 
     String footer(
-        "</html>"
+        "</table></html>"
         );
 
-    for(auto it : instance->knownAPs) {
-        out += it.ssid;
-        out += "<br />";
+    for(auto i(0); i < instance->numAPsFound; ++i) {
+        out += "<tr><td>";
+        out += instance->knownAPs[i]->ssid;
+        out += "</td><td>";
+        out += instance->knownAPs[i]->rssi;
+        out += "</td></tr>";
     }
 
     instance->configHTTPServer->send(200, "text/html", out + footer);
