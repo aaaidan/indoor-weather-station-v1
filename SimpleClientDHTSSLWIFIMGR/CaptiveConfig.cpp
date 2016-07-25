@@ -102,8 +102,8 @@ bool CaptiveConfig::haveConfig()
         case CaptiveConfigState::STARTING_HTTP:
             configHTTPServer = new ESP8266WebServer(80);
             configHTTPServer->on("/storePassword", storePassword);
-            // TODO: Would be better to redirect to a proper start page so we don't see the apple URL for instance.
-            configHTTPServer->onNotFound(serveConfigPage);
+            configHTTPServer->on("/", serveConfigPage);
+            configHTTPServer->onNotFound(serveRedirect);
             configHTTPServer->begin();
 
             state = CaptiveConfigState::STARTING_DNS;
@@ -158,14 +158,15 @@ APCredentials CaptiveConfig::getConfig() const
         };
 
     instance->pickedCreds = new APCredentials{
-        "This is beginning to look",
-        "like web programming"
+        instance->configHTTPServer->arg("ssid"),
+        instance->configHTTPServer->arg("pass")
         };
 
     instance->state = CaptiveConfigState::DONE;
 
     instance->configHTTPServer->send(200, "text/html", out);
 }
+
 
 /*static*/ void CaptiveConfig::serveConfigPage()
 {
@@ -174,12 +175,12 @@ APCredentials CaptiveConfig::getConfig() const
     String out(
         "<!doctype html>"
         "<html class=\"no-js\" lang=\"en\">"
-        "Pretend to <a href=\"http://setup/storePassword\">enter a passphrase</a>."
-        "<hr /><table><tr><th>SSID</th><th>RSSI</th></tr>"
+        "<body>"
+        "<hr /><table><tr><th>SSID</th><th>RSSI</th><th>Encryption Enum</th></tr>"
         );
 
     String footer(
-        "</table></html>"
+        "</table></body></html>"
         );
 
     for(auto i(0); i < instance->numAPsFound; ++i) {
@@ -187,9 +188,25 @@ APCredentials CaptiveConfig::getConfig() const
         out += instance->knownAPs[i]->ssid;
         out += "</td><td>";
         out += instance->knownAPs[i]->rssi;
-        out += "</td></tr>";
+        out += "</td><td>";
+        out += instance->knownAPs[i]->encryptionType;
+        out += "</td><td>";
+        out += "<form action=\"storePassword\"><input type=\"hidden\" name=\"ssid\" value=\"";
+        out += instance->knownAPs[i]->ssid;
+        out += "\"><input type=\"password\" name=\"pass\"><input type=\"submit\" value=\"Use This one!\">";
+        out += "</td></tr></form>";
     }
 
     instance->configHTTPServer->send(200, "text/html", out + footer);
+}
+
+
+/*static*/ void CaptiveConfig::serveRedirect()
+{
+    // This only sends one response, with a redirect header and no content.
+    instance->configHTTPServer->sendHeader( "Location",
+                                            "http://setup/",
+                                            true );
+    instance->configHTTPServer->send(302, "text/plain", "");
 }
 

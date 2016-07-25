@@ -83,9 +83,14 @@ class CaptiveConfig
          */
         APType **knownAPs;
 
+        /// Handles the password entered in to the configuration page
         static void storePassword();
         
+        /// Serves up the main configuration page
         static void serveConfigPage();
+
+        /// Sends a 302 redirect to "http://setup/" (the main config page)
+        static void serveRedirect();
 
         static CaptiveConfig *instance;
 
