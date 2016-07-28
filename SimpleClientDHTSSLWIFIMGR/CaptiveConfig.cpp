@@ -12,50 +12,11 @@ CaptiveConfig::CaptiveConfig() :
     configHTTPServer(nullptr),
     configDNSServer(nullptr),
     pickedCreds(nullptr),
-    state(CaptiveConfigState::SCANNING),
+    state(CaptiveConfigState::START_SCANNING),
     numAPsFound(0)
 {
     assert(instance == nullptr);
     instance = this;
-
-    // Set WiFi to station mode and disconnect from an AP if it was previously connected
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-
-    // Scan for WiFi networks that we can see
-    auto totalNetworksFound( WiFi.scanNetworks() );
-
-    // Fill knownAPs with a set of different networks we can see.
-    // Resolve duplicates by keeping the strongest signals for a given SSID.
-    knownAPs = new APType *[totalNetworksFound];
-    for(auto i(0); i < totalNetworksFound; ++i) {
-        knownAPs[i] = nullptr;
-
-        auto thisSSID( WiFi.SSID(i) );
-        auto thisRSSI( WiFi.RSSI(i) );
-
-        auto isNewSSID(true);
-        for(auto j(0); j < numAPsFound; ++j) {
-            if( knownAPs[j]->ssid == thisSSID ) {
-                isNewSSID = false;
-                if( knownAPs[j]->rssi > thisRSSI ) {
-                    knownAPs[j]->ssid = thisSSID;
-                    knownAPs[j]->rssi = thisRSSI;
-                    knownAPs[j]->encryptionType = WiFi.encryptionType(i);
-                }
-                break;
-            }
-        }
-
-        if(isNewSSID) {
-            knownAPs[numAPsFound++] = new APType{ thisSSID,
-                                                  thisRSSI,
-                                                  WiFi.encryptionType(i) };
-        }
-    }
-
-    // Calls to haveConfig() will finish the setup
-    state = CaptiveConfigState::STARTING_WIFI;
 }
 
 
@@ -75,13 +36,7 @@ CaptiveConfig::~CaptiveConfig()
         delete pickedCreds;
     }
 
-    for(auto i(0); i < numAPsFound; ++i) {
-        if(knownAPs[i] != nullptr) {
-            delete knownAPs[i];
-            knownAPs[i] = nullptr;
-        }
-    }
-    delete [] knownAPs;
+    tearDownKnownAPs();
 
     instance = nullptr;
 }
@@ -90,13 +45,48 @@ CaptiveConfig::~CaptiveConfig()
 bool CaptiveConfig::haveConfig()
 {
     switch (state) {
+        case CaptiveConfigState::START_SCANNING:
+            // Set WiFi to station mode and disconnect from an AP, in case
+            // it was previously connected.
+            // TODO: This seems to be covered in scanNetworks - double check in the rescanning case
+            WiFi.mode(WIFI_STA);
+            WiFi.disconnect();
+
+            // Scan asynchronously, don't show hidden networks.
+            WiFi.scanNetworks(true, false);
+
+            state = CaptiveConfigState::SCANNING;
+            return false;
+
+        case CaptiveConfigState::SCANNING:
+        {
+            auto scanState(WiFi.scanComplete());
+
+            if (scanState == WIFI_SCAN_RUNNING) {
+                return false;
+            } else if (scanState == WIFI_SCAN_FAILED) {
+                state = CaptiveConfigState::START_SCANNING;
+                return false;
+            }
+
+            populateKnownAPs(scanState);
+
+            state = CaptiveConfigState::STARTING_WIFI;
+            return false;
+        }
+
         case CaptiveConfigState::STARTING_WIFI:
             WiFi.mode(WIFI_AP);
             WiFi.softAPConfig( captiveServeIP, captiveServeIP,
                                IPAddress(255, 255, 255, 0) );
-            WiFi.softAP("VCW Indoor Weather Station");
+            WiFi.softAP(APNAME);
 
-            state = CaptiveConfigState::STARTING_HTTP;
+            // If this is our first time starting up (ie not a rescan)
+            if (configHTTPServer == nullptr) {
+                state = CaptiveConfigState::STARTING_HTTP;
+            } else {
+                state = CaptiveConfigState::SERVING;
+            }
             return false;
 
         case CaptiveConfigState::STARTING_HTTP:
@@ -137,12 +127,63 @@ bool CaptiveConfig::haveConfig()
 APCredentials CaptiveConfig::getConfig() const
 {
     assert(pickedCreds);
+    assert(state == CaptiveConfigState::DONE);
 
     if (pickedCreds) {
         return *pickedCreds;
     }
 
     return APCredentials();
+}
+
+
+void CaptiveConfig::populateKnownAPs(uint8_t numAPs)
+{
+    tearDownKnownAPs();
+
+    knownAPs = new APType *[numAPs];
+    for(auto i(0); i < numAPs; ++i) {
+        knownAPs[i] = nullptr;
+
+        auto thisSSID( WiFi.SSID(i) );
+        auto thisRSSI( WiFi.RSSI(i) );
+
+        auto isNewSSID(true);
+        for(auto j(0); j < numAPsFound; ++j) {
+            if( knownAPs[j]->ssid == thisSSID ) {
+                isNewSSID = false;
+                if( knownAPs[j]->rssi > thisRSSI ) {
+                    knownAPs[j]->ssid = thisSSID;
+                    knownAPs[j]->rssi = thisRSSI;
+                    knownAPs[j]->encryptionType = WiFi.encryptionType(i);
+                }
+                break;
+            }
+        }
+
+        if(isNewSSID) {
+            knownAPs[numAPsFound++] = new APType{ thisSSID,
+                                                  thisRSSI,
+                                                  WiFi.encryptionType(i) };
+        }
+    }
+}
+
+
+void CaptiveConfig::tearDownKnownAPs()
+{
+    for(auto i(0); i < numAPsFound; ++i) {
+        if(knownAPs[i] != nullptr) {
+            delete knownAPs[i];
+            knownAPs[i] = nullptr;
+        }
+    }
+
+    numAPsFound = 0;
+
+    delete [] knownAPs;
+
+    knownAPs = nullptr;
 }
 
 
@@ -172,11 +213,12 @@ APCredentials CaptiveConfig::getConfig() const
 {
     assert(instance && instance->configHTTPServer);
 
+    // TODO: Javascript reloady thing in case we've rescanned, also condition the network list on the scanning state?
     String out(
         "<!doctype html>"
         "<html class=\"no-js\" lang=\"en\">"
         "<body>"
-        "<hr /><table><tr><th>SSID</th><th>RSSI</th><th>Encryption Enum</th></tr>"
+        "<table><tr><th>SSID</th><th>RSSI</th><th>Encryption Enum</th></tr>"
         );
 
     String footer(

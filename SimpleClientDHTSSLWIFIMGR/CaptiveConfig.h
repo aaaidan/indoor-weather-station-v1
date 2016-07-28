@@ -6,6 +6,9 @@
 class ESP8266WebServer;
 class DNSServer;
 
+/// Name of the access point we present.
+#define APNAME "VCW Indoor Weather Station"
+
 /// IP address of the ESP8266 when we're serving the captive config page
 const static IPAddress captiveServeIP(192, 168, 1, 1);
 
@@ -61,6 +64,7 @@ class CaptiveConfig
     protected:
 
         enum class CaptiveConfigState {
+            START_SCANNING,
             SCANNING,
             STARTING_WIFI,
             STARTING_HTTP,
@@ -82,6 +86,16 @@ class CaptiveConfig
          * set to nullptr and at the high end of the array.
          */
         APType **knownAPs;
+
+        /// Fill knownAPs with a set of different networks we can see.
+        /*!
+         * Resolve duplicates by keeping the strongest signals for a given
+         * SSID.  numAPs is the number of APs reported by scanNetworks.
+         */
+        void populateKnownAPs(uint8_t numAPs);
+
+        /// Tears down the structure of known APs
+        void tearDownKnownAPs();
 
         /// Handles the password entered in to the configuration page
         static void storePassword();

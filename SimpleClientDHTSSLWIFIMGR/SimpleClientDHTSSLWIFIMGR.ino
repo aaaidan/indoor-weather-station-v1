@@ -151,7 +151,7 @@ void WiFiEvent(WiFiEvent_t event) {
     if (event <= WIFI_EVENT_MODE_CHANGE) {
         Serial.printf("[WiFi-event] event: %d (%s)\n", event, WiFiEvent_t_strings[event]);
     } else {
-        Serial.printf("[WiFi-event] event has invalid value\n", event);
+        Serial.printf("[WiFi-event] event has invalid value\n");
     }
 
     switch(event) {
@@ -215,9 +215,32 @@ void setup(void)
   captiveConfig = new CaptiveConfig;
 }
 
+const char * wlStatusTToCString(wl_status_t in)
+{
+  if (in == 255) {
+    return "No Shield";
+  }
+
+  const char * statuses[] = {
+    "Idle",
+    "No SSID Available",
+    "Scan Completed",
+    "Connected",
+    "Connect Failed",
+    "Connection Lost",
+    "Disconnected" };
+
+  if (in > 6)
+    return "ERROR: Bad enum value!";
+
+  return statuses[in];
+}
+
 
 void loop(void)
 {
+  static auto lastStatus(WL_NO_SHIELD);
+
   if( captiveConfig && captiveConfig->haveConfig() ) {
 
     APCredentials requestedNetwork( captiveConfig->getConfig() );
@@ -231,10 +254,19 @@ void loop(void)
     delete captiveConfig;
     captiveConfig = nullptr;
 
-    // TODO: At this point, WiFi is still in station mode, but HTTP and DNS
-    // servers have been cleaned up.
-  }
+    WiFi.mode(WIFI_STA);
+    WiFi.begin( requestedNetwork.ssid.c_str(),
+                requestedNetwork.passphrase.c_str() );
+  } else {
+    auto thisStatus(WiFi.status());
 
+    if (thisStatus != lastStatus) {
+      Serial.print("Status changed to ");
+      Serial.print(wlStatusTToCString(thisStatus));
+      Serial.print("\n");
+      lastStatus = thisStatus;
+    }
+  }
 }
 
 
