@@ -162,9 +162,10 @@ void CaptiveConfig::populateKnownAPs(uint8_t numAPs)
         }
 
         if(isNewSSID) {
-            knownAPs[numAPsFound++] = new APType{ thisSSID,
+            knownAPs[numAPsFound] = new APType{ thisSSID,
                                                   thisRSSI,
                                                   WiFi.encryptionType(i) };
+            ++numAPsFound;
         }
     }
 }
@@ -172,14 +173,15 @@ void CaptiveConfig::populateKnownAPs(uint8_t numAPs)
 
 void CaptiveConfig::tearDownKnownAPs()
 {
-    for(auto i(0); i < numAPsFound; ++i) {
+    auto numToTearDown(numAPsFound);
+    numAPsFound = 0;
+    
+    for(auto i(0); i < numToTearDown; ++i) {
         if(knownAPs[i] != nullptr) {
             delete knownAPs[i];
             knownAPs[i] = nullptr;
         }
     }
-
-    numAPsFound = 0;
 
     delete [] knownAPs;
 
