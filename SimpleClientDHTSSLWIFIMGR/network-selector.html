@@ -39,8 +39,7 @@ h2 {
   flex-direction: column;
   
   margin: auto;
-  
-  max-height: 100%;
+  margin-bottom: 20px;
 }
 
 @media screen and (min-width: 420px) {
@@ -72,7 +71,6 @@ h2 {
 
 .access-points-container {
   background: #fff;
-  overflow-y: auto;
   border: 1px solid #ddd;
   border-style: solid none;
 }
@@ -194,9 +192,14 @@ h2 {
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 1px 5px rgba(0,0,0,0.5);
-  padding: 25px 20px;
+  padding: 15px 20px;
 }
 
+@media screen and (min-height: 380px) {
+  .dialog {
+    padding: 25px 20px;
+  }
+}
 
 @keyframes jiggle {
   from { transform: translate(0,0); }
@@ -224,11 +227,17 @@ h2 {
 }
 
 .dialog-buttons {
-  margin-top: 25px;
+  margin-top: 10px;
   display: -webkit-flex;
   display: flex;
   -webkit-justify-content: space-between;
   justify-content: space-between;
+}
+
+@media screen and (min-height: 380px) {
+  .dialog-buttons {
+    margin-top: 25px;
+  }
 }
 
 button {
@@ -259,7 +268,7 @@ button.secondary {
     </style>
   </head>
   <body>
-
+    
   <template id="access-point">
     <!-- This template is only used by javascript -->
     <div class="access-point">
@@ -275,7 +284,7 @@ button.secondary {
 
   <div class="main">
     <h1>Station Setup</h1>
-    <p class="status">Choose a network for your weather station to use to report data&hellip;</p>
+    <p class="status">Choose a network for your weather station to connect to&hellip;</p>
 
     <div class="access-points-container">
       <!-- access points get put in here -->
@@ -297,7 +306,17 @@ button.secondary {
   </div>
   
 <script>
+// Setup error handling immediately
+window.addEventListener('error', function(e) {
+  $$(".status").textContent = "Whoops, something went wrong. Reset your weather station and try again. ";
+  $$(".status").textContent += "The nerdy details: \"" + e.message + "\"";
+  $$(".access-points-container").style.display = "none";
+  
+  alert(e.message);
+});
+</script>
 
+<script>
 var $ = document.querySelectorAll.bind(document);
 var $$ = document.querySelector.bind(document);
 
@@ -326,7 +345,9 @@ function submitPasswordScreen() {
   
   if (password.length == 0) {
     passwordInput.classList.add("jiggle");
-    setTimeout(()=> passwordInput.classList.remove("jiggle"), 500);
+    setTimeout(function() { 
+      return passwordInput.classList.remove("jiggle")
+    }, 500);
     return;
   }
 
@@ -336,7 +357,7 @@ function submitPasswordScreen() {
   submitButton.textContent = "Working...";
   submitButton.disabled = true;
   
-  setTimeout(() => {
+  setTimeout(function() {
     submitButton.textContent = "OK";
     submitButton.disabled = false;
   }, 1000);
@@ -358,7 +379,10 @@ function onClickAP() {
     var passwordScreen = $$(".passwordScreen");
     passwordScreen.querySelector(".network-name").textContent = ssid;
     passwordScreen.classList.add('enabled');
-    passwordScreen.querySelector(".passwordInput").focus();
+    
+    // Focussing the password field makes sense, but on small screens
+    // it can cause the context (instructions/buttons) to be obscured.
+    // passwordScreen.querySelector(".passwordInput").focus();
   } else {
     submitAP(ssid);
   }
@@ -371,9 +395,9 @@ function loadData(knownAPs) {
     container.removeChild(container.firstChild);
   }
   
-  knownAPs.sort((a,b) => 
-    b.rssi - a.rssi
-  ).map(x => {
+  knownAPs.sort(function(a,b) { 
+    return b.rssi - a.rssi
+  }).map(function(x) {
     var rootElement = document.importNode(accessPointTpl.content, true).children[0];
     
     rootElement.querySelector('.access-point-ssid').textContent = x.ssid;
@@ -391,16 +415,11 @@ function loadData(knownAPs) {
     rootElement.addEventListener('click', onClickAP);
     
     return rootElement;
-  }).forEach(x => container.appendChild(x) );
+  }).forEach(function(x) {
+    return container.appendChild(x);
+  } );
   
 }
-
-window.addEventListener('error', function(e) {
-  $$(".status").textContent = "Whoops, something went wrong. Reset your weather station and try again. ";
-  $$(".status").textContent += "The nerdy details: \"" + e.message + "\"";
-  $$(".access-points-container").style.display = "none";
-});
-
 </script>
 <script>
 
@@ -453,11 +472,11 @@ var knownAPs = [
 
 function refreshData() {
   loadData(
-    knownAPs.filter(x=>
-      Math.random() > .5
-    ).map(x=>
-      Object.assign({}, x, { rssi: (Math.random()*3) || 0 })
-    )
+    knownAPs.filter(function(x) {
+      return Math.random() > .5
+    }).map(function(x) {
+      return Object.assign({}, x, { rssi: (Math.random()*3) || 0 })
+    })
   );
 }
 
